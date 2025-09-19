@@ -421,6 +421,7 @@ netdev_tx_t mqnic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		// unknown TX queue
 		goto tx_drop;
 
+	// Avoid silly double-read by compiler
 	cons_ptr = READ_ONCE(ring->cons_ptr);
 
 	// prefetch for BQL

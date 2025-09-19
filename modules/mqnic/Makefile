@@ -48,4 +48,18 @@ help modules modules_install clean:
 
 install: modules_install
 
+XDP_SOURCES = $(wildcard *.bpf.c)
+XDP_OBJECTS = $(XDP_SOURCES:.bpf.c=.bpf.o)
+
+%.bpf.o: %.bpf.c
+	clang -O2 -g -target bpf -c $< -o $@
+
+xdp: $(XDP_OBJECTS)
+	@echo "XDP objects built: $(XDP_OBJECTS)"
+
+xdp_clean:
+	rm -f $(XDP_OBJECTS)
+
+
+
 endif

@@ -201,11 +201,19 @@ static u32 mqnic_get_rxfh_indir_size(struct net_device *ndev)
 	return priv->rx_queue_map_indir_table_size;
 }
 
-static int mqnic_get_rxfh(struct net_device *ndev, u32 *indir, u8 *key,
-		u8 *hfunc)
+//static int mqnic_get_rxfh(struct net_device *ndev, u32 *indir, u8 *key,
+//		u8 *hfunc)
+//		MOD
+static int mqnic_get_rxfh(struct net_device *ndev, struct ethtool_rxfh_param * cmd)
 {
+
+	u8* key = cmd->key;
+	u32* indir = cmd->indir;
+	u8* hfunc = &cmd->hfunc;
+
 	struct mqnic_priv *priv = netdev_priv(ndev);
 	int k;
+
 
 	if (hfunc)
 		*hfunc = ETH_RSS_HASH_TOP;
@@ -217,9 +225,14 @@ static int mqnic_get_rxfh(struct net_device *ndev, u32 *indir, u8 *key,
 	return 0;
 }
 
-static int mqnic_set_rxfh(struct net_device *ndev, const u32 *indir,
-		const u8 *key, const u8 hfunc)
+//static int mqnic_set_rxfh(struct net_device *ndev, const u32 *indir,
+//		const u8 *key, const u8 hfunc)
+static int mqnic_set_rxfh(struct net_device *ndev, struct ethtool_rxfh_param * cmd, struct netlink_ext_ack *extack)
 {
+	u8* key = cmd->key;
+	u32* indir = cmd->indir;
+	u8 hfunc = cmd->hfunc;
+
 	struct mqnic_priv *priv = netdev_priv(ndev);
 	int k;
 

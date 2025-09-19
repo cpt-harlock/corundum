@@ -4,6 +4,7 @@
  */
 
 #include "mqnic.h"
+#include <net/xdp.h>
 
 struct mqnic_ring *mqnic_create_rx_ring(struct mqnic_if *interface)
 {
@@ -290,6 +291,7 @@ int mqnic_refill_rx_buffers(struct mqnic_ring *ring)
 	return ret;
 }
 
+
 int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 {
 	struct mqnic_if *interface = cq->interface;
@@ -300,6 +302,8 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 	struct mqnic_cpl *cpl;
 	struct sk_buff *skb;
 	struct page *page;
+	// MOD
+	struct xdp_buff xdp;
 	u32 cq_index;
 	u32 cq_cons_ptr;
 	u32 ring_index;
@@ -343,6 +347,7 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 			break;
 		}
 
+		// Allocate skb with max GRO length
 		skb = napi_get_frags(&cq->napi);
 		if (unlikely(!skb)) {
 			netdev_err(priv->ndev, "%s: ring %d failed to allocate skb",
@@ -354,6 +359,7 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		if (interface->if_features & MQNIC_IF_FEATURE_PTP_TS)
 			skb_hwtstamps(skb)->hwtstamp = mqnic_read_cpl_ts(interface->mdev, rx_ring, cpl);
 
+		// Save RX queue index in skb
 		skb_record_rx_queue(skb, rx_ring->index);
 
 		// RX hardware checksum
@@ -379,8 +385,66 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		skb->truesize += rx_info->len;
 
 		// hand off SKB
+		// I need to implement XDP before the GRO can be enabled
+		// MOD
+		xdp.data = skb->data;
+		xdp.data_hard_start = skb->head;
+		xdp.data_end = skb->data + len;
+		xdp.rxq = NULL;
+		xdp.frame_sz = 0;
+		// Check for XDP program
+		if (priv->ndev->xdp_prog) {
+			pr_info("XDP program existing for the NIC");
+			int xdp_res;
+
+			xdp_res = bpf_prog_run_xdp(priv->ndev->xdp_prog, &xdp);
+			switch (xdp_res) {
+				case XDP_DROP:
+					// Drop the packet
+					priv->ndev->stats.rx_dropped++;
+					dev_kfree_skb_any(skb);
+					pr_info("XDP_DROP\n");
+					goto rx_next;
+					break;
+				case XDP_TX:
+					//	// Send out the same interface
+					if (mqnic_start_xmit(skb, priv->ndev) != NETDEV_TX_OK) {
+						//		// Failed to send, drop
+						// TODO: same as XDP_DROP, need to implement later
+						priv->ndev->stats.rx_dropped++;
+						dev_kfree_skb_any(skb);
+					}
+				//	goto rx_next;
+					pr_info("XDP_TX\n");
+					goto rx_next;
+					break;
+				case XDP_REDIRECT:
+				//	// Redirect to another interface
+				//	//if (bpf_redirect_map(priv->ndev->xdp_map, 0, BPF_F_INGRESS) == XDP_REDIRECT) {
+				//		// Failed to redirect, drop
+					// TODO: same as XDP_DROP, need to implement later
+					priv->ndev->stats.rx_dropped++;
+					dev_kfree_skb_any(skb);
+				//	//}
+				//	goto rx_next;
+					pr_info("XDP_REDIRECT\n");
+					goto rx_next;
+					break;
+				default:
+				//	// Pass 
+				//	priv->ndev->stats.rx_dropped++;
+				//	dev_kfree_skb_any(skb);
+				//	goto rx_next;
+					pr_info("XDP_PASS\n");
+					break;
+			}
+		}
+rx_packet:
+		// MOD END
+		// Original, pass the packet to upper layer
 		napi_gro_frags(&cq->napi);
 
+rx_next:
 		rx_ring->packets++;
 		rx_ring->bytes += le16_to_cpu(cpl->len);
 
