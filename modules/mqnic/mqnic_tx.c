@@ -188,6 +188,7 @@ void mqnic_free_tx_desc(struct mqnic_ring *ring, int index, int napi_budget)
 	struct sk_buff *skb = tx_info->skb;
 	u32 i;
 
+	pr_info("skb->users: %d\n", atomic_read(&skb->users.refs));
 	prefetchw(&skb->users);
 
 	dma_unmap_single(ring->dev, dma_unmap_addr(tx_info, dma_addr),
@@ -395,7 +396,6 @@ map_error:
 
 	return false;
 }
-
 netdev_tx_t mqnic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
@@ -411,6 +411,132 @@ netdev_tx_t mqnic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	if (unlikely(!priv->port_up))
 		goto tx_drop;
 
+	// For XDP_TX, should be the same index as RX queue
+	ring_index = skb_get_queue_mapping(skb);
+
+	rcu_read_lock();
+	ring = radix_tree_lookup(&priv->txq_table, ring_index);
+	rcu_read_unlock();
+
+	if (unlikely(!ring))
+		// unknown TX queue
+		goto tx_drop;
+
+	// Avoid silly double-read by compiler
+	cons_ptr = READ_ONCE(ring->cons_ptr);
+
+	// prefetch for BQL
+	netdev_txq_bql_enqueue_prefetchw(ring->tx_queue);
+
+	index = ring->prod_ptr & ring->size_mask;
+
+	tx_desc = (struct mqnic_desc *)(ring->buf + index * ring->stride);
+
+	tx_info = &ring->tx_info[index];
+
+	// TX hardware timestamp
+	tx_info->ts_requested = 0;
+	if (unlikely(priv->if_features & MQNIC_IF_FEATURE_PTP_TS && shinfo->tx_flags & SKBTX_HW_TSTAMP)) {
+		netdev_dbg(ndev, "%s: TX TS requested", __func__);
+		shinfo->tx_flags |= SKBTX_IN_PROGRESS;
+		tx_info->ts_requested = 1;
+	}
+
+	// TX hardware checksum
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		unsigned int csum_start = skb_checksum_start_offset(skb);
+		unsigned int csum_offset = skb->csum_offset;
+
+		if (csum_start > 255 || csum_offset > 127) {
+			netdev_info(ndev, "%s: Hardware checksum fallback start %d offset %d",
+					__func__, csum_start, csum_offset);
+
+			// offset out of range, fall back on software checksum
+			if (skb_checksum_help(skb)) {
+				// software checksumming failed
+				goto tx_drop_count;
+			}
+			tx_desc->tx_csum_cmd = 0;
+		} else {
+			tx_desc->tx_csum_cmd = cpu_to_le16(0x8000 | (csum_offset << 8) | (csum_start));
+		}
+	} else {
+		tx_desc->tx_csum_cmd = 0;
+	}
+
+	if (shinfo->nr_frags > ring->desc_block_size - 1 || (skb->data_len && skb->data_len < 32)) {
+		// too many frags or very short data portion; linearize
+		if (skb_linearize(skb))
+			goto tx_drop_count;
+	}
+
+	// map skb
+	if (!mqnic_map_skb(ring, tx_info, tx_desc, skb))
+		// map failed
+		goto tx_drop_count;
+
+	// count packet
+	ring->packets++;
+	ring->bytes += skb->len;
+
+	// enqueue
+	ring->prod_ptr++;
+
+	skb_tx_timestamp(skb);
+
+	stop_queue = mqnic_is_tx_ring_full(ring);
+	if (unlikely(stop_queue)) {
+		netdev_dbg(ndev, "%s: TX ring %d full on port %d",
+				__func__, ring_index, priv->index);
+		netif_tx_stop_queue(ring->tx_queue);
+	}
+
+	// BQL
+	//netdev_tx_sent_queue(ring->tx_queue, tx_info->len);
+	//__netdev_tx_sent_queue(ring->tx_queue, tx_info->len, skb->xmit_more);
+
+	// enqueue on NIC
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 2, 0)
+	if (unlikely(!netdev_xmit_more() || stop_queue)) {
+#else
+	if (unlikely(!skb->xmit_more || stop_queue)) {
+#endif
+		dma_wmb();
+		mqnic_tx_write_prod_ptr(ring);
+	}
+
+	// check if queue restarted
+	if (unlikely(stop_queue)) {
+		smp_rmb();
+
+		cons_ptr = READ_ONCE(ring->cons_ptr);
+
+		if (unlikely(!mqnic_is_tx_ring_full(ring)))
+			netif_tx_wake_queue(ring->tx_queue);
+	}
+
+	return NETDEV_TX_OK;
+
+tx_drop_count:
+	ring->dropped_packets++; tx_drop: dev_kfree_skb_any(skb);
+	return NETDEV_TX_OK;
+}
+netdev_tx_t mqnic_start_xdp_xmit(struct sk_buff *skb, struct net_device *ndev)
+{
+	struct skb_shared_info *shinfo = skb_shinfo(skb);
+	struct mqnic_priv *priv = netdev_priv(ndev);
+	struct mqnic_ring *ring;
+	struct mqnic_tx_info *tx_info;
+	struct mqnic_desc *tx_desc;
+	int ring_index;
+	u32 index;
+	bool stop_queue;
+	u32 cons_ptr;
+
+	if (unlikely(!priv->port_up))
+		goto tx_drop;
+
+	// For XDP_TX, should be the same index as RX queue
 	ring_index = skb_get_queue_mapping(skb);
 
 	rcu_read_lock();
@@ -522,3 +648,4 @@ tx_drop:
 	dev_kfree_skb_any(skb);
 	return NETDEV_TX_OK;
 }
+

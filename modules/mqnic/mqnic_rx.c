@@ -407,7 +407,9 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 					goto rx_next;
 					break;
 				case XDP_TX:
-					//	// Send out the same interface
+					// Increase the reference count, as mqnic_start_xmit will decrease it
+					skb_get(skb);
+					// Send out the same interface
 					if (mqnic_start_xmit(skb, priv->ndev) != NETDEV_TX_OK) {
 						//		// Failed to send, drop
 						// TODO: same as XDP_DROP, need to implement later
