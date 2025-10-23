@@ -188,7 +188,7 @@ void mqnic_free_tx_desc(struct mqnic_ring *ring, int index, int napi_budget)
 	struct sk_buff *skb = tx_info->skb;
 	u32 i;
 
-	pr_info("skb->users: %d\n", atomic_read(&skb->users.refs));
+	//pr_info("skb->users: %d\n", atomic_read(&skb->users.refs));
 	prefetchw(&skb->users);
 
 	dma_unmap_single(ring->dev, dma_unmap_addr(tx_info, dma_addr),

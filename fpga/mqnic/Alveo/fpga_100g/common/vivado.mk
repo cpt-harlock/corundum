@@ -26,6 +26,7 @@
 # include ../common/vivado.mk
 # 
 ###################################################################
+BOARD_DIR=/home/guest/xilinx-board-dir
 
 # phony targets
 .PHONY: fpga vivado tmpclean clean distclean
@@ -86,7 +87,8 @@ create_project.tcl: Makefile $(XCI_FILES_REL) $(IP_TCL_FILES_REL)
 	rm -rf defines.v
 	touch defines.v
 	for x in $(DEFS); do echo '`define' $$x >> defines.v; done
-	echo "create_project -force -part $(FPGA_PART) $(PROJECT)" > $@
+	echo "set_param board.repoPaths ${BOARD_DIR}/board_files" > $@
+	echo "create_project -force -part $(FPGA_PART) $(PROJECT)" >> $@
 	echo "add_files -fileset sources_1 defines.v $(SYN_FILES_REL)" >> $@
 	echo "set_property top $(FPGA_TOP) [current_fileset]" >> $@
 	echo "add_files -fileset constrs_1 $(XDC_FILES_REL)" >> $@

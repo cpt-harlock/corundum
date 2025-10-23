@@ -488,7 +488,7 @@ int mqnic_irq_init_platform(struct mqnic_dev *mdev);
 
 // mqnic_dev.c
 extern const struct file_operations mqnic_fops;
-
+int mqnic_bpf(struct net_device*, struct netdev_bpf*);
 // mqnic_if.c
 struct mqnic_if *mqnic_create_interface(struct mqnic_dev *mdev, int index, u8 __iomem *hw_addr);
 void mqnic_destroy_interface(struct mqnic_if *interface);

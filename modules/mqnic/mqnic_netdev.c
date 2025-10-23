@@ -501,6 +501,7 @@ static const struct net_device_ops mqnic_netdev_ops = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 2, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
 	.ndo_get_devlink_port = mqnic_get_devlink_port,
 #endif
+	.ndo_bpf = mqnic_bpf,
 };
 
 static void mqnic_link_status_timeout(struct timer_list *timer)

@@ -7,6 +7,7 @@
 #include "mqnic_ioctl.h"
 
 #include <linux/uaccess.h>
+#include <linux/bpf.h>
 
 static int mqnic_open(struct inode *inode, struct file *file)
 {
@@ -161,6 +162,29 @@ static long mqnic_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	}
 
 	return -EINVAL;
+}
+
+static int mqnic_xdp_setup(struct net_device* dev, struct bpf_prog* prog) {
+	struct mqnic_priv* priv = netdev_priv(dev);
+	struct bpf_prog* old_prog;
+
+	old_prog = xchg(&priv->ndev->xdp_prog, prog);
+
+	if (old_prog)
+		bpf_prog_put(old_prog);
+
+	return 0;
+}
+
+int mqnic_bpf(struct net_device* dev, struct netdev_bpf *xdp) {
+	switch (xdp->command) {
+		case XDP_SETUP_PROG:
+			return mqnic_xdp_setup(dev, xdp->prog);
+		default:
+			return -EINVAL;
+
+
+	}
 }
 
 const struct file_operations mqnic_fops = {

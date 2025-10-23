@@ -5,6 +5,9 @@
 
 #include "mqnic.h"
 #include <net/xdp.h>
+#include <uapi/linux/bpf.h>
+#include <linux/filter.h>
+#include <linux/skbuff.h>
 
 struct mqnic_ring *mqnic_create_rx_ring(struct mqnic_if *interface)
 {
@@ -368,33 +371,14 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 			skb->ip_summed = CHECKSUM_COMPLETE;
 		}
 
-		// unmap
-		dma_unmap_page(dev, dma_unmap_addr(rx_info, dma_addr),
-				dma_unmap_len(rx_info, len), DMA_FROM_DEVICE);
-		rx_info->dma_addr = 0;
-
-		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
-				rx_info->len, DMA_FROM_DEVICE);
-
-		__skb_fill_page_desc(skb, 0, page, rx_info->page_offset, len);
-		rx_info->page = NULL;
-
-		skb_shinfo(skb)->nr_frags = 1;
-		skb->len = len;
-		skb->data_len = len;
-		skb->truesize += rx_info->len;
-
-		// hand off SKB
-		// I need to implement XDP before the GRO can be enabled
-		// MOD
-		xdp.data = skb->data;
-		xdp.data_hard_start = skb->head;
-		xdp.data_end = skb->data + len;
+		xdp.data_hard_start = page;
+		xdp.data = xdp.data_hard_start + rx_info->page_offset;
+		xdp.data_end = xdp.data + len;
 		xdp.rxq = NULL;
 		xdp.frame_sz = 0;
 		// Check for XDP program
 		if (priv->ndev->xdp_prog) {
-			pr_info("XDP program existing for the NIC");
+			//pr_info("XDP program existing for the NIC");
 			int xdp_res;
 
 			xdp_res = bpf_prog_run_xdp(priv->ndev->xdp_prog, &xdp);
@@ -402,22 +386,21 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 				case XDP_DROP:
 					// Drop the packet
 					priv->ndev->stats.rx_dropped++;
-					dev_kfree_skb_any(skb);
-					pr_info("XDP_DROP\n");
+					//dev_kfree_skb_any(skb);
+					//__napi_kfree_skb(skb, SKB_DROP_REASON_XDP);
+					//pr_info("XDP_DROP\n");
 					goto rx_next;
 					break;
 				case XDP_TX:
-					// Increase the reference count, as mqnic_start_xmit will decrease it
-					skb_get(skb);
 					// Send out the same interface
 					if (mqnic_start_xmit(skb, priv->ndev) != NETDEV_TX_OK) {
 						//		// Failed to send, drop
-						// TODO: same as XDP_DROP, need to implement later
 						priv->ndev->stats.rx_dropped++;
-						dev_kfree_skb_any(skb);
+						//dev_kfree_skb_any(skb);
 					}
 				//	goto rx_next;
 					pr_info("XDP_TX\n");
+					//TODO: maybe we still need to perform clearing operation of RX
 					goto rx_next;
 					break;
 				case XDP_REDIRECT:
@@ -441,8 +424,25 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 					break;
 			}
 		}
-rx_packet:
-		// MOD END
+
+
+		// unmap
+		dma_unmap_page(dev, dma_unmap_addr(rx_info, dma_addr),
+				dma_unmap_len(rx_info, len), DMA_FROM_DEVICE);
+		rx_info->dma_addr = 0;
+
+		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
+				rx_info->len, DMA_FROM_DEVICE);
+
+		__skb_fill_page_desc(skb, 0, page, rx_info->page_offset, len);
+		rx_info->page = NULL;
+
+		skb_shinfo(skb)->nr_frags = 1;
+		skb->len = len;
+		skb->data_len = len;
+		skb->truesize += rx_info->len;
+
+		// hand off SKB
 		// Original, pass the packet to upper layer
 		napi_gro_frags(&cq->napi);
 
