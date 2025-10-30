@@ -613,7 +613,7 @@ int mqnic_process_tx_cq(struct mqnic_cq *cq, int napi_budget);
 void mqnic_tx_irq(struct mqnic_cq *cq);
 int mqnic_poll_tx_cq(struct napi_struct *napi, int budget);
 netdev_tx_t mqnic_start_xmit(struct sk_buff *skb, struct net_device *dev);
-netdev_tx_t mqnic_start_xdp_xmit(struct sk_buff *skb, struct net_device *dev);
+netdev_tx_t mqnic_xdp_start_xmit(const struct xdp_buff *xdp, struct net_device *dev);
 
 // mqnic_rx.c
 struct mqnic_ring *mqnic_create_rx_ring(struct mqnic_if *interface);

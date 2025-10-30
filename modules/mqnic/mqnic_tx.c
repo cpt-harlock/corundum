@@ -4,6 +4,7 @@
  */
 
 #include <linux/version.h>
+#include "linux/skbuff.h"
 #include "mqnic.h"
 
 struct mqnic_ring *mqnic_create_tx_ring(struct mqnic_if *interface)
@@ -521,9 +522,9 @@ tx_drop_count:
 	ring->dropped_packets++; tx_drop: dev_kfree_skb_any(skb);
 	return NETDEV_TX_OK;
 }
-netdev_tx_t mqnic_start_xdp_xmit(struct sk_buff *skb, struct net_device *ndev)
+netdev_tx_t mqnic_xdp_start_xmit(const struct xdp_buff *xdp, struct net_device *ndev)
 {
-	struct skb_shared_info *shinfo = skb_shinfo(skb);
+	struct skb_shared_info *shinfo; // = skb_shinfo(skb);
 	struct mqnic_priv *priv = netdev_priv(ndev);
 	struct mqnic_ring *ring;
 	struct mqnic_tx_info *tx_info;
@@ -537,7 +538,8 @@ netdev_tx_t mqnic_start_xdp_xmit(struct sk_buff *skb, struct net_device *ndev)
 		goto tx_drop;
 
 	// For XDP_TX, should be the same index as RX queue
-	ring_index = skb_get_queue_mapping(skb);
+	// TODO: for the moment, just use queue 0
+	ring_index = xdp->rxq->queue_index;
 
 	rcu_read_lock();
 	ring = radix_tree_lookup(&priv->txq_table, ring_index);
@@ -558,6 +560,22 @@ netdev_tx_t mqnic_start_xdp_xmit(struct sk_buff *skb, struct net_device *ndev)
 	tx_desc = (struct mqnic_desc *)(ring->buf + index * ring->stride);
 
 	tx_info = &ring->tx_info[index];
+
+	// Allocate skb to hold XDP data
+	struct sk_buff *skb = netdev_alloc_skb(ndev, xdp->data_end - xdp->data);
+	if (!skb)
+		goto tx_drop;
+
+	// Copy XDP data to skb
+	skb_copy_to_linear_data(skb, xdp->data, xdp->data_end - xdp->data);
+
+	// Set skb lengths
+	skb->len = xdp->data_end - xdp->data;
+	skb->data_len = skb->len;
+
+	// Get skb shared info
+	shinfo = skb_shinfo(skb);
+	// TODO: possibly set flags in shinfo if needed
 
 	// TX hardware timestamp
 	tx_info->ts_requested = 0;

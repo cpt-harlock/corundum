@@ -350,32 +350,12 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 			break;
 		}
 
-		// Allocate skb with max GRO length
-		skb = napi_get_frags(&cq->napi);
-		if (unlikely(!skb)) {
-			netdev_err(priv->ndev, "%s: ring %d failed to allocate skb",
-					__func__, rx_ring->index);
-			break;
-		}
 
-		// RX hardware timestamp
-		if (interface->if_features & MQNIC_IF_FEATURE_PTP_TS)
-			skb_hwtstamps(skb)->hwtstamp = mqnic_read_cpl_ts(interface->mdev, rx_ring, cpl);
-
-		// Save RX queue index in skb
-		skb_record_rx_queue(skb, rx_ring->index);
-
-		// RX hardware checksum
-		if (priv->ndev->features & NETIF_F_RXCSUM) {
-			skb->csum = csum_unfold((__sum16) cpu_to_be16(le16_to_cpu(cpl->rx_csum)));
-			skb->ip_summed = CHECKSUM_COMPLETE;
-		}
-
-		xdp.data_hard_start = page;
+		xdp.data_hard_start = page_address(page);
 		xdp.data = xdp.data_hard_start + rx_info->page_offset;
 		xdp.data_end = xdp.data + len;
-		xdp.rxq = NULL;
-		xdp.frame_sz = 0;
+		xdp.frame_sz = page_size(page);
+
 		// Check for XDP program
 		if (priv->ndev->xdp_prog) {
 			//pr_info("XDP program existing for the NIC");
@@ -393,7 +373,7 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 					break;
 				case XDP_TX:
 					// Send out the same interface
-					if (mqnic_start_xmit(skb, priv->ndev) != NETDEV_TX_OK) {
+					if (mqnic_xdp_start_xmit(&xdp, priv->ndev) != NETDEV_TX_OK) {
 						//		// Failed to send, drop
 						priv->ndev->stats.rx_dropped++;
 						//dev_kfree_skb_any(skb);
@@ -425,17 +405,38 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 			}
 		}
 
+		// Allocate skb with max GRO length
+		skb = napi_get_frags(&cq->napi);
+		if (unlikely(!skb)) {
+			netdev_err(priv->ndev, "%s: ring %d failed to allocate skb",
+					__func__, rx_ring->index);
+			break;
+		}
+
+		// RX hardware timestamp
+		if (interface->if_features & MQNIC_IF_FEATURE_PTP_TS)
+			skb_hwtstamps(skb)->hwtstamp = mqnic_read_cpl_ts(interface->mdev, rx_ring, cpl);
+
+		// Save RX queue index in skb
+		skb_record_rx_queue(skb, rx_ring->index);
+
+		// RX hardware checksum
+		if (priv->ndev->features & NETIF_F_RXCSUM) {
+			skb->csum = csum_unfold((__sum16) cpu_to_be16(le16_to_cpu(cpl->rx_csum)));
+			skb->ip_summed = CHECKSUM_COMPLETE;
+		}
+
 
 		// unmap
-		dma_unmap_page(dev, dma_unmap_addr(rx_info, dma_addr),
-				dma_unmap_len(rx_info, len), DMA_FROM_DEVICE);
-		rx_info->dma_addr = 0;
+		//dma_unmap_page(dev, dma_unmap_addr(rx_info, dma_addr),
+		//		dma_unmap_len(rx_info, len), DMA_FROM_DEVICE);
+		//rx_info->dma_addr = 0;
 
 		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
 				rx_info->len, DMA_FROM_DEVICE);
 
 		__skb_fill_page_desc(skb, 0, page, rx_info->page_offset, len);
-		rx_info->page = NULL;
+		//rx_info->page = NULL;
 
 		skb_shinfo(skb)->nr_frags = 1;
 		skb->len = len;
@@ -447,6 +448,12 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		napi_gro_frags(&cq->napi);
 
 rx_next:
+		dma_unmap_page(dev, dma_unmap_addr(rx_info, dma_addr),
+				dma_unmap_len(rx_info, len), DMA_FROM_DEVICE);
+		rx_info->dma_addr = 0;
+		rx_info->page = NULL;
+
+
 		rx_ring->packets++;
 		rx_ring->bytes += le16_to_cpu(cpl->len);
 
