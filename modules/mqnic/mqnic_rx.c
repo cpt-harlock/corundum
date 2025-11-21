@@ -356,6 +356,9 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		xdp.data_end = xdp.data + len;
 		xdp.frame_sz = page_size(page);
 
+		// Try to sync for CPU access
+		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
+				rx_info->len, DMA_FROM_DEVICE);
 		// Check for XDP program
 		if (priv->ndev->xdp_prog) {
 			//pr_info("XDP program existing for the NIC");
@@ -366,40 +369,47 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 				case XDP_DROP:
 					// Drop the packet
 					priv->ndev->stats.rx_dropped++;
-					//dev_kfree_skb_any(skb);
-					//__napi_kfree_skb(skb, SKB_DROP_REASON_XDP);
-					//pr_info("XDP_DROP\n");
 					goto rx_next;
 					break;
 				case XDP_TX:
-					// Send out the same interface
-					if (mqnic_xdp_start_xmit(&xdp, priv->ndev) != NETDEV_TX_OK) {
-						//		// Failed to send, drop
+					//pr_info("XDP_TX\n");
+					// Create a new skb to send out
+					skb = netdev_alloc_skb(priv->ndev, len);
+					//skb = napi_get_frags(&cq->napi);
+					if (unlikely(!skb)) {
 						priv->ndev->stats.rx_dropped++;
-						//dev_kfree_skb_any(skb);
+						pr_info("XDP_TX: failed to allocate skb\n");
+						goto rx_next;
 					}
-				//	goto rx_next;
-					pr_info("XDP_TX\n");
-					//TODO: maybe we still need to perform clearing operation of RX
+					// Write data to skb
+					skb_put_data(skb, xdp.data, len);
+					// Set skb queue mapping
+					skb_set_queue_mapping(skb, rx_ring->index);
+					//print_hex_dump(KERN_INFO, "XDP_TX packet: ", DUMP_PREFIX_NONE, 16, 1,
+					//		skb->data, min(len, 64), true);
+					// TODO: check if we need to set skb fields/flags here
+					//
+					// Send out the packet
+					if (mqnic_start_xmit(skb, priv->ndev) != NETDEV_TX_OK) {
+						// Failed to send, drop
+						priv->ndev->stats.rx_dropped++;
+						dev_kfree_skb_any(skb);
+						pr_info("XDP_TX failed\n");
+					}
 					goto rx_next;
 					break;
 				case XDP_REDIRECT:
-				//	// Redirect to another interface
-				//	//if (bpf_redirect_map(priv->ndev->xdp_map, 0, BPF_F_INGRESS) == XDP_REDIRECT) {
-				//		// Failed to redirect, drop
-					// TODO: same as XDP_DROP, need to implement later
-					priv->ndev->stats.rx_dropped++;
-					dev_kfree_skb_any(skb);
-				//	//}
-				//	goto rx_next;
+					// Redirect to another interface
 					pr_info("XDP_REDIRECT\n");
+					if (xdp_do_redirect(priv->ndev, &xdp, priv->ndev->xdp_prog) != 0) {
+						// Failed to redirect, drop
+						priv->ndev->stats.rx_dropped++;
+						pr_info("XDP_REDIRECT failed\n");
+					}
 					goto rx_next;
 					break;
 				default:
 				//	// Pass 
-				//	priv->ndev->stats.rx_dropped++;
-				//	dev_kfree_skb_any(skb);
-				//	goto rx_next;
 					pr_info("XDP_PASS\n");
 					break;
 			}
@@ -425,12 +435,6 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 			skb->csum = csum_unfold((__sum16) cpu_to_be16(le16_to_cpu(cpl->rx_csum)));
 			skb->ip_summed = CHECKSUM_COMPLETE;
 		}
-
-
-		// unmap
-		//dma_unmap_page(dev, dma_unmap_addr(rx_info, dma_addr),
-		//		dma_unmap_len(rx_info, len), DMA_FROM_DEVICE);
-		//rx_info->dma_addr = 0;
 
 		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
 				rx_info->len, DMA_FROM_DEVICE);
