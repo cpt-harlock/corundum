@@ -4,6 +4,7 @@
  */
 
 #include "mqnic.h"
+#include "mqnic_defines.h"
 #include <net/xdp.h>
 #include <uapi/linux/bpf.h>
 #include <linux/filter.h>
@@ -249,7 +250,7 @@ int mqnic_prepare_rx_desc(struct mqnic_ring *ring, int index)
 	}
 
 	// map page
-	dma_addr = dma_map_page(ring->dev, page, 0, len, DMA_FROM_DEVICE);
+	dma_addr = dma_map_page(ring->dev, page, RX_HEADROOM, len, DMA_FROM_DEVICE);
 
 	if (unlikely(dma_mapping_error(ring->dev, dma_addr))) {
 		dev_err(ring->dev, "%s: DMA mapping failed on interface %d",
@@ -265,7 +266,7 @@ int mqnic_prepare_rx_desc(struct mqnic_ring *ring, int index)
 	// update rx_info
 	rx_info->page = page;
 	rx_info->page_order = page_order;
-	rx_info->page_offset = 0;
+	rx_info->page_offset = RX_HEADROOM;
 	rx_info->dma_addr = dma_addr;
 	rx_info->len = len;
 
@@ -292,6 +293,40 @@ int mqnic_refill_rx_buffers(struct mqnic_ring *ring)
 	mqnic_rx_write_prod_ptr(ring);
 
 	return ret;
+}
+
+
+static inline
+int my_xdp_update_frame_from_buff(struct net_device *ndev, const struct xdp_buff *xdp,
+			       struct xdp_frame *xdp_frame)
+{
+	int metasize, headroom;
+
+	/* Assure headroom is available for storing info */
+	headroom = xdp->data - xdp->data_hard_start;
+	metasize = xdp->data - xdp->data_meta;
+	metasize = metasize > 0 ? metasize : 0;
+	netdev_info(ndev, "%s: headroom %d metasize %d", __func__, headroom, metasize);
+	if (unlikely((headroom - metasize) < sizeof(*xdp_frame))) {
+		netdev_info(ndev, "%s: not enough space for xdp_frame data", __func__); 
+		return -ENOSPC;
+	}
+
+	/* Catch if driver didn't reserve tailroom for skb_shared_info */
+	if (unlikely(xdp->data_end > xdp_data_hard_end(xdp))) {
+		XDP_WARN("Driver BUG: missing reserved tailroom");
+		netdev_info(ndev, "%s: driver missing reserved tailroom", __func__);
+		return -ENOSPC;
+	}
+
+	xdp_frame->data = xdp->data;
+	xdp_frame->len  = xdp->data_end - xdp->data;
+	xdp_frame->headroom = headroom - sizeof(*xdp_frame);
+	xdp_frame->metasize = metasize;
+	xdp_frame->frame_sz = xdp->frame_sz;
+	xdp_frame->flags = xdp->flags;
+
+	return 0;
 }
 
 
@@ -335,6 +370,10 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		page = rx_info->page;
 		len = min_t(u32, le16_to_cpu(cpl->len), rx_info->len);
 
+
+		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
+				rx_info->len, DMA_FROM_DEVICE);
+
 		if (len < ETH_HLEN) {
 			netdev_warn(priv->ndev, "%s: ring %d dropping short frame (length %d)",
 					__func__, rx_ring->index, len);
@@ -351,14 +390,33 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		}
 
 
-		xdp.data_hard_start = page_address(page);
-		xdp.data = xdp.data_hard_start + rx_info->page_offset;
-		xdp.data_end = xdp.data + len;
-		xdp.frame_sz = page_size(page);
+		struct xdp_rxq_info* rxq = (struct xdp_rxq_info*)kcalloc(sizeof(struct xdp_rxq_info), 1, GFP_KERNEL);
+		if ( unlikely(xdp_rxq_info_reg(rxq, priv->ndev, cq->cqn, cq->napi.napi_id) != 0) ) {
+			netdev_info(priv->ndev, "%s: error registering rxq info for xdb_buff", __func__);
+			break;
+		}
 
-		// Try to sync for CPU access
-		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
-				rx_info->len, DMA_FROM_DEVICE);
+		if ( unlikely(xdp_rxq_info_reg_mem_model(rxq, MEM_TYPE_PAGE_ORDER0, NULL) != 0)) {
+			netdev_info(priv->ndev, "%s: error registering memory model for xdp_buff", __func__);
+			break;
+		}
+
+
+		xdp_init_buff(&xdp, PAGE_SIZE, rxq);
+		xdp_prepare_buff(&xdp, page_address(page), rx_info->page_offset, len, true);
+		//netdev_info(priv->ndev, "%s: page offset %u", __func__, rx_info->page_offset);
+		
+
+		//struct xdp_frame *xdp_frame = xdp_convert_buff_to_frame(&xdp);
+		//if (xdp_frame == NULL) {
+		//	netdev_info(priv->ndev, "%s: unable to convert xdp buff to frame", __func__);
+		//}
+		//xdp_frame = xdp.data_hard_start;
+		//my_xdp_update_frame_from_buff(priv->ndev, &xdp, xdp_frame);
+
+		// END DEBUG
+
+
 		// Check for XDP program
 		if (priv->ndev->xdp_prog) {
 			//pr_info("XDP program existing for the NIC");
@@ -384,7 +442,8 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 					// Write data to skb
 					skb_put_data(skb, xdp.data, len);
 					// Set skb queue mapping
-					skb_set_queue_mapping(skb, rx_ring->index);
+					// TODO: find the fucking qid
+					//skb_set_queue_mapping(skb, rx_ring->index);
 					//print_hex_dump(KERN_INFO, "XDP_TX packet: ", DUMP_PREFIX_NONE, 16, 1,
 					//		skb->data, min(len, 64), true);
 					// TODO: check if we need to set skb fields/flags here
@@ -401,11 +460,49 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 				case XDP_REDIRECT:
 					// Redirect to another interface
 					pr_info("XDP_REDIRECT\n");
-					if (xdp_do_redirect(priv->ndev, &xdp, priv->ndev->xdp_prog) != 0) {
-						// Failed to redirect, drop
+					int err;
+					if ((err = xdp_do_redirect(priv->ndev, &xdp, priv->ndev->xdp_prog)) != 0) {
+					//	// Failed to redirect, drop
+						if (err == -EBADRQC) {
+							netdev_info(priv->ndev, "%s: XDP_REDIRECT bad req", __func__);
+						} else if (err == -EINVAL) {
+							netdev_info(priv->ndev, "%s: XDP_REDIRECT invalid redirect", __func__);
+						} else if (err == -EOVERFLOW) {
+							netdev_info(priv->ndev, "%s: XDP_REDIRECT redirect overflow", __func__);
+						} else if (err == -ENOENT) {
+							netdev_info(priv->ndev, "%s: XDP_REDIRECT redirect no entry", __func__);
+						}
+						else {
+							netdev_info(priv->ndev, "%s: XDP_REDIRECT unknown error %d", __func__, err);
+						}
+						//DEBUG
+						struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
+						enum bpf_map_type map_type = ri->map_type;
+
+						// print target index
+						netdev_info(priv->ndev, "%s: bpf redirect target index %llu", __func__, ri->tgt_index);
+						// print target value
+						netdev_info(priv->ndev, "%s: bpf redirect target value %llu", __func__, ri->tgt_value);
+						// print map id
+						netdev_info(priv->ndev, "%s: bpf redirect map id %u", __func__, ri->map_id);
+						// try getting the device
+						//struct net_device *tgt_net = dev_get_by_index_rcu(dev_net(priv->ndev), ri->tgt_index);
+						//if (!tgt_net) {
+						//	netdev_info(priv->ndev, "%s: unable to get target net device for index %llu", __func__, ri->tgt_index);
+						//} else {
+						//	netdev_info(priv->ndev, "%s: target net device name %s", __func__, tgt_net->name);
+						//}
+
+
+						if (map_type == BPF_MAP_TYPE_XSKMAP) {
+							netdev_info(priv->ndev, "%s: bpf map type xskmap", __func__);
+						} else if (map_type == BPF_MAP_TYPE_UNSPEC) {
+							netdev_info(priv->ndev, "%s: bpf map type unspec", __func__);
+						}
 						priv->ndev->stats.rx_dropped++;
 						pr_info("XDP_REDIRECT failed\n");
 					}
+					xdp_do_flush();
 					goto rx_next;
 					break;
 				default:

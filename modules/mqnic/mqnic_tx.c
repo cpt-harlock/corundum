@@ -4,6 +4,7 @@
  */
 
 #include <linux/version.h>
+#include <net/xdp.h>
 #include "linux/skbuff.h"
 #include "mqnic.h"
 
@@ -415,7 +416,7 @@ netdev_tx_t mqnic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 
 	if (unlikely(!priv->port_up)) {
-	pr_info("mqnic_start_xmit: port down on port %d\n", priv->index);
+		pr_info("mqnic_start_xmit: port down on port %d\n", priv->index);
 		goto tx_drop;
 	}
 
@@ -526,7 +527,7 @@ netdev_tx_t mqnic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			netif_tx_wake_queue(ring->tx_queue);
 	}
 
-	pr_info("mqnic_start_xmit: transmitted skb len %d\n", skb->len);
+	netdev_info(ndev, "mqnic_start_xmit: transmitted skb len %d\n", skb->len);
 	return NETDEV_TX_OK;
 
 tx_drop_count:
@@ -534,23 +535,25 @@ tx_drop_count:
 	pr_info("mqnic_start_xmit: dropped skb len %d\n", skb->len);
 	return NETDEV_TX_OK;
 }
-netdev_tx_t mqnic_xdp_start_xmit(const struct xdp_buff *xdp,
-                                 struct net_device *ndev) {
-
-	// Allocate skb to hold XDP data
-	struct sk_buff *skb = netdev_alloc_skb(ndev, xdp->data_end - xdp->data);
+int mqnic_xdp_start_xmit(struct net_device *ndev, int num_frames, struct xdp_frame **xdp_frames, u32 flags)
+{
+	// Currently only support single frame
+	struct xdp_frame *xdp = xdp_frames[0];
+//
+//	// Allocate skb to hold XDP data
+	struct sk_buff *skb = netdev_alloc_skb(ndev, xdp->len);
 	if (!skb) {
 		pr_info("mqnic_xdp_start_xmit: failed to allocate skb\n");
 		goto tx_drop;
 	}
 
 	// Copy XDP data to skb
-	skb_copy_to_linear_data(skb, xdp->data, xdp->data_end - xdp->data);
-	skb->queue_mapping = 0; // Use queue 0 for XDP_TX
+	skb_put_data(skb, xdp->data, xdp->len);
+	//skb->queue_mapping = 0; // Use queue 0 for XDP_TX
 	//
-	struct skb_shared_info *shm = skb_shinfo(skb);
-	shm->tx_flags |= SKBTX_HW_TSTAMP; // Request hardware timestamp
-	shm->nr_frags = 0; // No frags, linear skb
+	//struct skb_shared_info *shm = skb_shinfo(skb);
+	//shm->tx_flags |= SKBTX_HW_TSTAMP; // Request hardware timestamp
+	//shm->nr_frags = 0; // No frags, linear skb
 	
 	
 
@@ -558,35 +561,35 @@ netdev_tx_t mqnic_xdp_start_xmit(const struct xdp_buff *xdp,
   // Print XDP data length
   // Ethernet header
   // and Ip header
-  pr_info("mqnic_xdp_start_xmit: Ethertype 0x%04x\n",
+  netdev_info(ndev,"mqnic_xdp_start_xmit: Ethertype 0x%04x\n",
           (ntohs(*((u16 *)(skb->data + 12)))));
-  pr_info("mqnic_xdp_start_xmit: IP Protocol %d\n",
+  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Protocol %d\n",
           (*((u8 *)(skb->data + 23))));
   // Print Ethernet source and destination
   // Print Ethernet source and destination
   // Destination MAC
-  pr_info("mqnic_xdp_start_xmit: Eth Dest %pM\n", (skb->data + 0));
+  netdev_info(ndev,"mqnic_xdp_start_xmit: Eth Dest %pM\n", (skb->data + 0));
   // Source MAC
-  pr_info("mqnic_xdp_start_xmit: Eth Src %pM\n", (skb->data + 6));
+  netdev_info(ndev,"mqnic_xdp_start_xmit: Eth Src %pM\n", (skb->data + 6));
   // Print IP source and destination
   // Destination IP
-  pr_info("mqnic_xdp_start_xmit: IP Dest %pI4\n", (skb->data + 30));
+  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Dest %pI4\n", (skb->data + 30));
   // Source IP
-  pr_info("mqnic_xdp_start_xmit: IP Src %pI4\n", (skb->data + 26));
+  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Src %pI4\n", (skb->data + 26));
   // IP Protocol
-  pr_info("mqnic_xdp_start_xmit: IP Protocol %d\n",
+  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Protocol %d\n",
           (*((u8 *)(skb->data + 23))));
 
   // END DEBUG
 
   // Set skb lengths
-  skb->len = xdp->data_end - xdp->data;
-  skb->data_len = skb->len;
+  //skb->len = xdp->len;
+  //skb->data_len = skb->len;
 
 	return mqnic_start_xmit(skb, ndev);
 
 tx_drop:
 	dev_kfree_skb_any(skb);
-	return NETDEV_TX_OK;
+	return num_frames;
 
 }

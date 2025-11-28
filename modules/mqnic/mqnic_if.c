@@ -4,6 +4,7 @@
  */
 
 #include "mqnic.h"
+#include "net/xdp.h"
 
 struct mqnic_if *mqnic_create_interface(struct mqnic_dev *mdev, int index, u8 __iomem *hw_addr)
 {
@@ -276,6 +277,7 @@ struct mqnic_if *mqnic_create_interface(struct mqnic_dev *mdev, int index, u8 __
 			goto fail;
 		}
 		interface->ndev[k] = ndev;
+		xdp_set_features_flag(ndev,  NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT | NETDEV_XDP_ACT_NDO_XMIT);
 	}
 
 	return interface;

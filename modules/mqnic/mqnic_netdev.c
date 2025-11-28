@@ -502,6 +502,7 @@ static const struct net_device_ops mqnic_netdev_ops = {
 	.ndo_get_devlink_port = mqnic_get_devlink_port,
 #endif
 	.ndo_bpf = mqnic_bpf,
+	.ndo_xdp_xmit = mqnic_xdp_start_xmit,
 };
 
 static void mqnic_link_status_timeout(struct timer_list *timer)
