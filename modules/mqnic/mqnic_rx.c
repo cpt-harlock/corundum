@@ -404,19 +404,7 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 
 		xdp_init_buff(&xdp, PAGE_SIZE, rxq);
 		xdp_prepare_buff(&xdp, page_address(page), rx_info->page_offset, len, true);
-		//netdev_info(priv->ndev, "%s: page offset %u", __func__, rx_info->page_offset);
 		
-
-		//struct xdp_frame *xdp_frame = xdp_convert_buff_to_frame(&xdp);
-		//if (xdp_frame == NULL) {
-		//	netdev_info(priv->ndev, "%s: unable to convert xdp buff to frame", __func__);
-		//}
-		//xdp_frame = xdp.data_hard_start;
-		//my_xdp_update_frame_from_buff(priv->ndev, &xdp, xdp_frame);
-
-		// END DEBUG
-
-
 		// Check for XDP program
 		if (priv->ndev->xdp_prog) {
 			//pr_info("XDP program existing for the NIC");
@@ -475,34 +463,9 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 						else {
 							netdev_info(priv->ndev, "%s: XDP_REDIRECT unknown error %d", __func__, err);
 						}
-						//DEBUG
-						struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
-						enum bpf_map_type map_type = ri->map_type;
-
-						// print target index
-						netdev_info(priv->ndev, "%s: bpf redirect target index %llu", __func__, ri->tgt_index);
-						// print target value
-						netdev_info(priv->ndev, "%s: bpf redirect target value %llu", __func__, ri->tgt_value);
-						// print map id
-						netdev_info(priv->ndev, "%s: bpf redirect map id %u", __func__, ri->map_id);
-						// try getting the device
-						//struct net_device *tgt_net = dev_get_by_index_rcu(dev_net(priv->ndev), ri->tgt_index);
-						//if (!tgt_net) {
-						//	netdev_info(priv->ndev, "%s: unable to get target net device for index %llu", __func__, ri->tgt_index);
-						//} else {
-						//	netdev_info(priv->ndev, "%s: target net device name %s", __func__, tgt_net->name);
-						//}
-
-
-						if (map_type == BPF_MAP_TYPE_XSKMAP) {
-							netdev_info(priv->ndev, "%s: bpf map type xskmap", __func__);
-						} else if (map_type == BPF_MAP_TYPE_UNSPEC) {
-							netdev_info(priv->ndev, "%s: bpf map type unspec", __func__);
-						}
 						priv->ndev->stats.rx_dropped++;
 						pr_info("XDP_REDIRECT failed\n");
 					}
-					xdp_do_flush();
 					goto rx_next;
 					break;
 				default:
@@ -588,6 +551,8 @@ rx_drop:
 
 	// replenish buffers
 	mqnic_refill_rx_buffers(rx_ring);
+
+	xdp_do_flush();
 
 	return done;
 }

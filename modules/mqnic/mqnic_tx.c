@@ -537,56 +537,26 @@ tx_drop_count:
 }
 int mqnic_xdp_start_xmit(struct net_device *ndev, int num_frames, struct xdp_frame **xdp_frames, u32 flags)
 {
-	// Currently only support single frame
-	struct xdp_frame *xdp = xdp_frames[0];
+	struct sk_buff *skb;
+	for (int i = 0; i < num_frames; i++) {
+		// Currently only support single frame
+		struct xdp_frame *xdp = xdp_frames[0];
 //
-//	// Allocate skb to hold XDP data
-	struct sk_buff *skb = netdev_alloc_skb(ndev, xdp->len);
-	if (!skb) {
-		pr_info("mqnic_xdp_start_xmit: failed to allocate skb\n");
-		goto tx_drop;
+//		// Allocate skb to hold XDP data
+		skb = netdev_alloc_skb(ndev, xdp->len);
+		if (!skb) {
+			pr_info("mqnic_xdp_start_xmit: failed to allocate skb\n");
+			goto tx_drop;
+		}
+
+		// Copy XDP data to skb
+		skb_put_data(skb, xdp->data, xdp->len);
+		// Transmit the skb
+		if(!mqnic_start_xmit(skb, ndev)) {
+			pr_info("mqnic_xdp_start_xmit: failed to transmit skb\n");
+			goto tx_drop;
+		}
 	}
-
-	// Copy XDP data to skb
-	skb_put_data(skb, xdp->data, xdp->len);
-	//skb->queue_mapping = 0; // Use queue 0 for XDP_TX
-	//
-	//struct skb_shared_info *shm = skb_shinfo(skb);
-	//shm->tx_flags |= SKBTX_HW_TSTAMP; // Request hardware timestamp
-	//shm->nr_frags = 0; // No frags, linear skb
-	
-	
-
-  // DEBUG
-  // Print XDP data length
-  // Ethernet header
-  // and Ip header
-  netdev_info(ndev,"mqnic_xdp_start_xmit: Ethertype 0x%04x\n",
-          (ntohs(*((u16 *)(skb->data + 12)))));
-  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Protocol %d\n",
-          (*((u8 *)(skb->data + 23))));
-  // Print Ethernet source and destination
-  // Print Ethernet source and destination
-  // Destination MAC
-  netdev_info(ndev,"mqnic_xdp_start_xmit: Eth Dest %pM\n", (skb->data + 0));
-  // Source MAC
-  netdev_info(ndev,"mqnic_xdp_start_xmit: Eth Src %pM\n", (skb->data + 6));
-  // Print IP source and destination
-  // Destination IP
-  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Dest %pI4\n", (skb->data + 30));
-  // Source IP
-  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Src %pI4\n", (skb->data + 26));
-  // IP Protocol
-  netdev_info(ndev,"mqnic_xdp_start_xmit: IP Protocol %d\n",
-          (*((u8 *)(skb->data + 23))));
-
-  // END DEBUG
-
-  // Set skb lengths
-  //skb->len = xdp->len;
-  //skb->data_len = skb->len;
-
-	return mqnic_start_xmit(skb, ndev);
 
 tx_drop:
 	dev_kfree_skb_any(skb);
