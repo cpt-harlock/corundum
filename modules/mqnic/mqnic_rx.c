@@ -392,14 +392,6 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 			break;
 		}
 
-		// Allocate skb with max GRO length
-		skb = napi_get_frags(&cq->napi);
-		if (unlikely(!skb)) {
-			netdev_err(priv->ndev, "%s: ring %d failed to allocate skb",
-					__func__, rx_ring->index);
-			break;
-		}
-
 		// Check for XDP program
 		if (priv->ndev->xdp_prog) {
 
@@ -420,30 +412,28 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 				case XDP_TX:
 					//pr_info("XDP_TX\n");
 					// Create a new skb to send out
-					//skb = netdev_alloc_skb(priv->ndev, len);
-					//pr_info("XDP_TX: allocated skb %p for len %d\n", skb, len);
-					////skb = napi_get_frags(&cq->napi);
-					//if (unlikely(!skb)) {
-					//	priv->ndev->stats.rx_dropped++;
-					//	pr_info("XDP_TX: failed to allocate skb\n");
-					//	goto rx_next;
-					//}
-					//// Write data to skb
-					//skb_put_data(skb, xdp.data, len);
+					skb = netdev_alloc_skb(priv->ndev, len);
+					if (unlikely(!skb)) {
+						priv->ndev->stats.rx_dropped++;
+						pr_info("XDP_TX: failed to allocate skb\n");
+						goto rx_next;
+					}
+					// Write data to skb
+					skb_put_data(skb, xdp.data, len);
 					// Set skb queue mapping
 					// TODO: find the fucking qid
-					//skb_set_queue_mapping(skb, rx_ring->index);
+					skb_set_queue_mapping(skb, rx_ring->index);
 					//print_hex_dump(KERN_INFO, "XDP_TX packet: ", DUMP_PREFIX_NONE, 16, 1,
 					//		skb->data, min(len, 64), true);
 					// TODO: check if we need to set skb fields/flags here
 					//
 					// Send out the packet
-					//if (mqnic_start_xmit(skb, priv->ndev) != NETDEV_TX_OK) {
-					//	// Failed to send, drop
-					//	priv->ndev->stats.rx_dropped++;
-					//	dev_kfree_skb_any(skb);
-					//	pr_info("XDP_TX failed\n");
-					//}
+					if (mqnic_start_xmit(skb, priv->ndev) != NETDEV_TX_OK) {
+						// Failed to send, drop
+						priv->ndev->stats.rx_dropped++;
+						dev_kfree_skb_any(skb);
+						pr_info("XDP_TX failed\n");
+					}
 					//goto rx_next;
 					break;
 				case XDP_REDIRECT:
@@ -474,12 +464,19 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 					pr_info("XDP_PASS\n");
 					break;
 			}
-			//if (xdp_res != XDP_PASS) {
-				// Free the skb we got
-				//napi_free_frags(&cq->napi);
-				napi_gro_frags(&cq->napi);
+			if (xdp_res != XDP_PASS) {
+				// Need to free the page and continue
+				__free_pages(page, rx_info->page_order);
 				goto rx_next;
-			//}
+			}
+		}
+
+		// Allocate skb with max GRO length
+		skb = napi_get_frags(&cq->napi);
+		if (unlikely(!skb)) {
+			netdev_err(priv->ndev, "%s: ring %d failed to allocate skb",
+					__func__, rx_ring->index);
+			break;
 		}
 
 
