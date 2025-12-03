@@ -29,6 +29,7 @@ struct mqnic_ring *mqnic_create_rx_ring(struct mqnic_if *interface)
 	ring->prod_ptr = 0;
 	ring->cons_ptr = 0;
 
+
 	return ring;
 }
 
@@ -342,6 +343,7 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 	struct page *page;
 	// MOD
 	struct xdp_buff xdp;
+	struct xdp_rxq_info* rxq;
 	u32 cq_index;
 	u32 cq_cons_ptr;
 	u32 ring_index;
@@ -369,6 +371,7 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		rx_info = &rx_ring->rx_info[ring_index];
 		page = rx_info->page;
 		len = min_t(u32, le16_to_cpu(cpl->len), rx_info->len);
+		rxq = &rx_ring->xdp_rxq;
 
 
 		dma_sync_single_range_for_cpu(dev, rx_info->dma_addr, rx_info->page_offset,
@@ -390,23 +393,13 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 		}
 
 
-		struct xdp_rxq_info* rxq = (struct xdp_rxq_info*)kcalloc(sizeof(struct xdp_rxq_info), 1, GFP_KERNEL);
-		if ( unlikely(xdp_rxq_info_reg(rxq, priv->ndev, cq->cqn, cq->napi.napi_id) != 0) ) {
-			netdev_info(priv->ndev, "%s: error registering rxq info for xdb_buff", __func__);
-			break;
-		}
-
-		if ( unlikely(xdp_rxq_info_reg_mem_model(rxq, MEM_TYPE_PAGE_ORDER0, NULL) != 0)) {
-			netdev_info(priv->ndev, "%s: error registering memory model for xdp_buff", __func__);
-			break;
-		}
-
-
-		xdp_init_buff(&xdp, PAGE_SIZE, rxq);
-		xdp_prepare_buff(&xdp, page_address(page), rx_info->page_offset, len, true);
-		
 		// Check for XDP program
 		if (priv->ndev->xdp_prog) {
+
+
+			xdp_init_buff(&xdp, PAGE_SIZE, rxq);
+			xdp_prepare_buff(&xdp, page_address(page), rx_info->page_offset, len, true);
+
 			//pr_info("XDP program existing for the NIC");
 			int xdp_res;
 
@@ -447,7 +440,7 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 					break;
 				case XDP_REDIRECT:
 					// Redirect to another interface
-					pr_info("XDP_REDIRECT\n");
+					//pr_info("XDP_REDIRECT\n");
 					int err;
 					if ((err = xdp_do_redirect(priv->ndev, &xdp, priv->ndev->xdp_prog)) != 0) {
 					//	// Failed to redirect, drop

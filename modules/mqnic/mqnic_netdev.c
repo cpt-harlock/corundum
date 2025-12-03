@@ -59,6 +59,24 @@ int mqnic_start_port(struct net_device *ndev)
 			goto fail;
 		}
 
+		// Registre xdp_rxq_info
+		if (xdp_rxq_info_reg(&q->xdp_rxq, ndev, q->index, cq->napi.napi_id)) {
+			netdev_err(ndev, "Failed to register xdp_rxq_info for RX queue %d", q->index);
+			mqnic_destroy_rx_ring(q);
+			mqnic_destroy_cq(cq);
+			ret = -EINVAL;
+			goto fail;
+		}
+		// Register mem model
+		if (xdp_rxq_info_reg_mem_model(&q->xdp_rxq, MEM_TYPE_PAGE_ORDER0, NULL)) {
+			netdev_err(ndev, "Failed to register mem model for xdp_rxq_info for RX queue %d", q->index);
+			xdp_rxq_info_unreg(&q->xdp_rxq);
+			mqnic_destroy_rx_ring(q);
+			mqnic_destroy_cq(cq);
+			ret = -EINVAL;
+			goto fail;
+		}
+
 		q->mtu = ndev->mtu;
 		if (ndev->mtu + ETH_HLEN <= PAGE_SIZE)
 			q->page_order = 0;
@@ -261,6 +279,10 @@ void mqnic_stop_port(struct net_device *ndev)
 		cq = q->cq;
 		napi_disable(&cq->napi);
 		netif_napi_del(&cq->napi);
+		// Unregister mem model
+		xdp_rxq_info_unreg_mem_model(&q->xdp_rxq);
+		// Unregister xdp_rxq_info
+		xdp_rxq_info_unreg(&q->xdp_rxq);
 		mqnic_close_rx_ring(q);
 		mqnic_destroy_rx_ring(q);
 		radix_tree_delete(&priv->rxq_table, iter.index);

@@ -21,7 +21,7 @@
 #include <linux/ptp_clock_kernel.h>
 #include <linux/timer.h>
 #include <net/devlink.h>
-
+#include <net/xdp.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
 
@@ -265,6 +265,8 @@ struct mqnic_ring {
 	int index;
 	struct mqnic_cq *cq;
 	int enabled;
+
+	struct xdp_rxq_info xdp_rxq;
 
 	u8 __iomem *hw_addr;
 } ____cacheline_aligned_in_smp;

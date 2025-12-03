@@ -527,7 +527,7 @@ netdev_tx_t mqnic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			netif_tx_wake_queue(ring->tx_queue);
 	}
 
-	netdev_info(ndev, "mqnic_start_xmit: transmitted skb len %d\n", skb->len);
+	//netdev_info(ndev, "mqnic_start_xmit: transmitted skb len %d\n", skb->len);
 	return NETDEV_TX_OK;
 
 tx_drop_count:
@@ -538,9 +538,10 @@ tx_drop_count:
 int mqnic_xdp_start_xmit(struct net_device *ndev, int num_frames, struct xdp_frame **xdp_frames, u32 flags)
 {
 	struct sk_buff *skb;
+	//netdev_info(ndev, "%s: num_frames %d\n", __func__, num_frames);
 	for (int i = 0; i < num_frames; i++) {
 		// Currently only support single frame
-		struct xdp_frame *xdp = xdp_frames[0];
+		struct xdp_frame *xdp = xdp_frames[i];
 //
 //		// Allocate skb to hold XDP data
 		skb = netdev_alloc_skb(ndev, xdp->len);
@@ -552,11 +553,12 @@ int mqnic_xdp_start_xmit(struct net_device *ndev, int num_frames, struct xdp_fra
 		// Copy XDP data to skb
 		skb_put_data(skb, xdp->data, xdp->len);
 		// Transmit the skb
-		if(!mqnic_start_xmit(skb, ndev)) {
+		if(mqnic_start_xmit(skb, ndev) != NETDEV_TX_OK) {
 			pr_info("mqnic_xdp_start_xmit: failed to transmit skb\n");
 			goto tx_drop;
 		}
 	}
+	return NETDEV_TX_OK;
 
 tx_drop:
 	dev_kfree_skb_any(skb);
