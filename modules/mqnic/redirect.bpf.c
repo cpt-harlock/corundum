@@ -10,6 +10,6 @@
 
 SEC("xdp")
 int xdp_prog_redirect(struct xdp_md *ctx) {
-	return bpf_redirect(4, 0);
+	return bpf_redirect(6, 0);
 }
 char _license[] SEC("license") = "GPL";

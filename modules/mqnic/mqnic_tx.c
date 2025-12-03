@@ -190,6 +190,7 @@ void mqnic_free_tx_desc(struct mqnic_ring *ring, int index, int napi_budget)
 	struct sk_buff *skb = tx_info->skb;
 	u32 i;
 
+	//pr_info("mqnic_free_tx_desc: index %d skb len %d\n", index, skb->len);
 	//pr_info("skb->users: %d\n", atomic_read(&skb->users.refs));
 	prefetchw(&skb->users);
 
@@ -202,6 +203,7 @@ void mqnic_free_tx_desc(struct mqnic_ring *ring, int index, int napi_budget)
 		dma_unmap_page(ring->dev, tx_info->frags[i].dma_addr,
 				tx_info->frags[i].len, DMA_TO_DEVICE);
 
+	pr_info("mqnic_free_tx_desc: freeing skb %p len %d\n", skb, skb->len);
 	napi_consume_skb(skb, napi_budget);
 	tx_info->skb = NULL;
 }
