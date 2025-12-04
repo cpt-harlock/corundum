@@ -465,8 +465,10 @@ int mqnic_process_rx_cq(struct mqnic_cq *cq, int napi_budget)
 					break;
 			}
 			if (xdp_res != XDP_PASS) {
-				// Need to free the page and continue
-				__free_pages(page, rx_info->page_order);
+				if ( xdp_res != XDP_REDIRECT ) {
+					// For DROP and TX, we need to free the page and continue
+					__free_pages(page, rx_info->page_order);
+				}
 				goto rx_next;
 			}
 		}
